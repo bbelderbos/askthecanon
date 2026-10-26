@@ -6,7 +6,7 @@
 
 Semantic search over a curated library of public-domain literature.
 
-**Live at [askthecanon.com](https://askthecanon.com).**
+**Write-up at [belderbos.dev/classics](https://belderbos.dev/classics/). Run it locally below.**
 
 Instead of grepping for words, you bring a *question* — "how should I deal with people who
 wrong me?" — and get the passages that mean that, ranked across every book in your library and
@@ -40,9 +40,21 @@ recorded to a local SQLite database (`classics.db`) via SQLModel.
 
 ## Setup
 
+Requires Python 3.14 (`uv` installs it for you).
+
 ```bash
-uv sync
+uv sync                  # install dependencies
+uv run main.py sync      # build the library: fetch + embed every id in library.txt
 ```
+
+`books/` is not in the repo, so the `sync` step is required before `ask` or the web UI return
+anything. The first run downloads the ~420 MB embedding model and every book in `library.txt`,
+then embeds them — expect a while; it's much faster on Apple Silicon or a GPU. Later runs only
+build what changed.
+
+Search needs no config. The social pipeline (`publish.py`, `buffer.py`) does — see
+`.env.example` and [docs/social-pipeline.md](docs/social-pipeline.md). To host it yourself, see
+[docs/do.md](docs/do.md).
 
 ## Usage
 
