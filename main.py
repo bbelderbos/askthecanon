@@ -5,7 +5,7 @@ import re
 import sys
 from collections import Counter
 from collections.abc import Callable
-from functools import cache
+from functools import cache, lru_cache
 from pathlib import Path
 from typing import NamedTuple
 
@@ -360,12 +360,21 @@ def load_library(book_ids: list[int] | None = None) -> tuple[list[Passage], np.n
         meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
         title, author = meta.get("title", str(book_id)), meta.get("author", "")
         summary = meta.get("summary", "")
+        # text stays on disk (see with_text) so a long-running server fits in less RAM
         for i, c in enumerate(json.loads(chunks_path.read_text())):
-            passages.append(
-                Passage(title, author, c["label"], c["text"], book_id, i, summary)
-            )
+            passages.append(Passage(title, author, c["label"], "", book_id, i, summary))
         matrices.append(np.load(vectors_path))
     return passages, np.vstack(matrices) if matrices else np.empty((0, 0))
+
+
+@lru_cache(maxsize=8)
+def _book_texts(book_id: int) -> tuple[str, ...]:
+    chunks = json.loads((BOOKS_DIR / f"{book_id}.chunks.json").read_text())
+    return tuple(c["text"] for c in chunks)
+
+
+def with_text(passage: Passage) -> Passage:
+    return passage._replace(text=_book_texts(passage.book_id)[passage.offset])
 
 
 def drop_adjacent(
@@ -425,8 +434,8 @@ def ask(
         print(f'\nNothing strong enough for "{query}".')
         return
     console.print(f"\n[bold]Passages for[/bold] [italic]“{query}”[/italic]\n")
-    for rank, (i, score) in enumerate(results, 1):
-        passage = passages[i]
+    hits = [(with_text(passages[i]), score) for i, score in results]
+    for rank, (passage, score) in enumerate(hits, 1):
         console.print(
             f"  [bold cyan]{rank}[/]  [dim]{score:.2f}[/]  {passage.cite()}",
             no_wrap=True,
@@ -441,7 +450,7 @@ def ask(
 
     choice = input("pick a number to deep read (enter to skip) > ").strip()
     if choice.isdigit() and 1 <= int(choice) <= len(results):
-        passage = passages[results[int(choice) - 1][0]]
+        passage = hits[int(choice) - 1][0]
         console.print()
         console.print(
             Panel(

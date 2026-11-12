@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
+import numpy as np
 import pytest
 from fastapi import HTTPException
 from fastapi.security import HTTPBasicCredentials
@@ -7,8 +8,10 @@ from fastapi.testclient import TestClient
 from sqlmodel import create_engine
 
 import db
+import main
 import web
 from db import PdfEvent, QuoteEvent, ReadEvent, SearchEvent
+from main import Passage
 
 
 @pytest.fixture
@@ -174,3 +177,17 @@ def test_rate_limit_returns_429_after_pdf_limit(store, monkeypatch):
     codes = [client.post("/v1/pdf", json=payload).status_code for _ in range(11)]
     assert codes.count(200) == 10  # PDF_LIMIT default is 10/minute
     assert codes[-1] == 429
+
+
+def test_ask_returns_passage_text_loaded_on_demand(store, monkeypatch, tmp_path):
+    (tmp_path / "7.chunks.json").write_text('[{"label": "I", "text": "the woods"}]')
+    monkeypatch.setattr(main, "BOOKS_DIR", tmp_path)
+    main._book_texts.cache_clear()
+    passage = Passage("Walden", "Thoreau", "I", "", book_id=7, offset=0)
+    monkeypatch.setattr(web, "library", lambda: ([passage], np.zeros((1, 3))))
+    monkeypatch.setattr(web, "search_passages", lambda *a: [(0, 0.9)])
+
+    r = TestClient(web.app).get("/v1/ask", params={"q": "nature"})
+
+    assert r.json()[0]["text"] == "the woods"
+    main._book_texts.cache_clear()

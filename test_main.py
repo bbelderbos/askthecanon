@@ -9,12 +9,41 @@ from main import (
     chunk_text,
     diversify,
     humanize_author,
+    load_library,
     preview,
     read_library,
     reflow,
     retrieve,
     search_passages,
+    with_text,
 )
+
+
+@pytest.fixture
+def one_book(monkeypatch, tmp_path):
+    (tmp_path / "7.chunks.json").write_text(
+        '[{"label": "I", "text": "first"}, {"label": "II", "text": "second"}]'
+    )
+    (tmp_path / "7.meta.json").write_text('{"title": "Walden", "author": "Thoreau"}')
+    np.save(tmp_path / "7.npy", np.zeros((2, 3), dtype=np.float16))
+    monkeypatch.setattr(main, "BOOKS_DIR", tmp_path)
+    main._book_texts.cache_clear()
+    yield
+    main._book_texts.cache_clear()
+
+
+def test_load_library_keeps_passage_text_out_of_memory(one_book):
+    passages, vectors = load_library()
+    assert [(p.label, p.offset, p.text) for p in passages] == [
+        ("I", 0, ""),
+        ("II", 1, ""),
+    ]
+    assert vectors.shape == (2, 3)
+
+
+def test_with_text_loads_the_passage_text_from_disk(one_book):
+    passages, _ = load_library()
+    assert with_text(passages[1]) == passages[1]._replace(text="second")
 
 
 def test_model_downloads_when_not_cached(monkeypatch):

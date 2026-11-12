@@ -14,6 +14,7 @@ from main import (
     Passage,
     best_excerpt,
     load_library,
+    with_text,
     reflow,
     search_passages,
 )
@@ -93,7 +94,7 @@ def gather(
     question: str, passages: list[Passage], vectors, k: int = 10, per_book: int = 3
 ) -> list[Candidate]:
     ranked = search_passages(question, passages, vectors, k, per_book)
-    return [Candidate(passages[i], score) for i, score in ranked]
+    return [Candidate(with_text(passages[i]), score) for i, score in ranked]
 
 
 PROMPT_TEMPLATE = """You are a growth-focused social media editor for askthecanon.com, a \
