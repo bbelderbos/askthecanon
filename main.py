@@ -17,9 +17,6 @@ from rich.panel import Panel
 
 console = Console()
 
-# use the locally cached model and skip the hub round-trip (and its rate-limit warning)
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("TQDM_DISABLE", "1")  # silence the model's "Loading weights" bar
 
 SEARCH_URL = "https://gutendex.com/books/"
@@ -133,9 +130,13 @@ def chunk_text(
 
 @cache
 def _model():
-    import sentence_transformers as st  # lazy so the offline env vars take effect first
+    import sentence_transformers as st  # lazy: torch is slow to import
 
-    return st.SentenceTransformer(EMBED_MODEL)
+    # prefer the cache to skip the hub round-trip; a fresh install has to download
+    try:
+        return st.SentenceTransformer(EMBED_MODEL, local_files_only=True)
+    except OSError:
+        return st.SentenceTransformer(EMBED_MODEL)
 
 
 def embed(texts: list[str]) -> np.ndarray:

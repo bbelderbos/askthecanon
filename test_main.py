@@ -17,6 +17,22 @@ from main import (
 )
 
 
+def test_model_downloads_when_not_cached(monkeypatch):
+    attempts = []
+
+    def fake_transformer(name, local_files_only=False):
+        attempts.append(local_files_only)
+        if local_files_only:
+            raise OSError("not in cache")
+        return "downloaded"
+
+    monkeypatch.setattr("sentence_transformers.SentenceTransformer", fake_transformer)
+    main._model.cache_clear()
+    assert main._model() == "downloaded"
+    assert attempts == [True, False]
+    main._model.cache_clear()
+
+
 def test_diversify_caps_passages_per_book():
     # one book monopolises the ranking; cap should let others through
     ranked = [(0, 0.9), (1, 0.8), (2, 0.7), (3, 0.6), (4, 0.5)]
