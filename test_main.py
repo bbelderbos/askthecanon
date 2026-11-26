@@ -62,6 +62,24 @@ def test_with_text_refuses_a_book_removed_after_load(one_book, tmp_path):
         with_text(passages[0])
 
 
+def test_load_library_skips_a_book_whose_vectors_and_chunks_disagree(
+    one_book, tmp_path
+):
+    np.save(tmp_path / "8.npy", np.zeros((3, 3), dtype=np.float16))  # 3 rows
+    (tmp_path / "8.chunks.json").write_text('[{"label": "I", "text": "only one"}]')
+    passages, vectors = load_library()
+    assert {p.book_id for p in passages} == {7}
+    assert vectors.shape == (2, 3)
+
+
+def test_build_index_leaves_no_partial_files(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "BOOKS_DIR", tmp_path)
+    monkeypatch.setattr(main, "embed", lambda texts: np.ones((len(texts), 3)))
+    chunks, _ = main.build_index(7, "One paragraph.\n\nAnother paragraph.")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["7.chunks.json", "7.npy"]
+    assert len(load_library()[0]) == len(chunks)
+
+
 def test_missing_books_lists_ids_without_a_full_index(one_book, tmp_path):
     (tmp_path / "8.npy").touch()  # vectors without chunks or metadata
     assert missing_books([7, 8, 9]) == [8, 9]

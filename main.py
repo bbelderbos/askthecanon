@@ -1,5 +1,7 @@
 import argparse
+import io
 import json
+import logging
 import os
 import re
 import sys
@@ -16,6 +18,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 os.environ.setdefault("TQDM_DISABLE", "1")  # silence the model's "Loading weights" bar
 
@@ -188,13 +191,19 @@ def build_index(book_id: int, text: str) -> tuple[list[Chunk], np.ndarray]:
     # (max score drift ~4e-5, no top-k reordering) and the matmul upcasts to f32
     vectors = embed([c.text for c in chunks]).astype(np.float16)
     BOOKS_DIR.mkdir(exist_ok=True)
-    # replace, not rewrite: a running server holds offsets into the old file
-    chunks_path = BOOKS_DIR / f"{book_id}.chunks.json"
-    tmp_path = chunks_path.with_name(chunks_path.name + ".tmp")
-    tmp_path.write_text(json.dumps([c._asdict() for c in chunks]))
-    tmp_path.replace(chunks_path)
-    np.save(BOOKS_DIR / f"{book_id}.npy", vectors)
+    buffer = io.BytesIO()
+    np.save(buffer, vectors)
+    _replace_file(BOOKS_DIR / f"{book_id}.npy", buffer.getvalue())
+    chunks_json = json.dumps([c._asdict() for c in chunks]).encode()
+    _replace_file(BOOKS_DIR / f"{book_id}.chunks.json", chunks_json)
     return chunks, vectors
+
+
+def _replace_file(path: Path, data: bytes) -> None:
+    # swap in whole, never rewrite in place: a reader must not see a half-written file
+    tmp_path = path.with_name(path.name + ".tmp")
+    tmp_path.write_bytes(data)
+    tmp_path.replace(path)
 
 
 def preview(chunk: str, width: int = 90) -> str:
@@ -385,12 +394,22 @@ def load_library(book_ids: list[int] | None = None) -> tuple[list[Passage], np.n
         with chunks_path.open() as f:
             version = _file_version(f)
             chunks = json.load(f)
+        vectors = np.load(vectors_path)
+        if len(vectors) != len(chunks):
+            # one misaligned book would shift every row stacked after it
+            logger.warning(
+                "skipping book %d: %d vectors for %d chunks, run sync",
+                book_id,
+                len(vectors),
+                len(chunks),
+            )
+            continue
         # text stays on disk (see with_text) so a long-running server fits in less RAM
         for i, c in enumerate(chunks):
             passages.append(
                 Passage(title, author, c["label"], "", book_id, i, summary, version)
             )
-        matrices.append(np.load(vectors_path))
+        matrices.append(vectors)
     return passages, np.vstack(matrices) if matrices else np.empty((0, 0))
 
 
