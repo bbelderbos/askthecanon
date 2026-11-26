@@ -11,7 +11,6 @@ import db
 import main
 import web
 from db import PdfEvent, QuoteEvent, ReadEvent, SearchEvent
-from main import Passage
 
 
 @pytest.fixture
@@ -183,11 +182,28 @@ def test_ask_returns_passage_text_loaded_on_demand(store, monkeypatch, tmp_path)
     (tmp_path / "7.chunks.json").write_text('[{"label": "I", "text": "the woods"}]')
     monkeypatch.setattr(main, "BOOKS_DIR", tmp_path)
     main._book_texts.cache_clear()
-    passage = Passage("Walden", "Thoreau", "I", "", book_id=7, offset=0)
-    monkeypatch.setattr(web, "library", lambda: ([passage], np.zeros((1, 3))))
+    np.save(tmp_path / "7.npy", np.zeros((1, 3), dtype=np.float16))
+    library = main.load_library()
+    monkeypatch.setattr(web, "library", lambda: library)
     monkeypatch.setattr(web, "search_passages", lambda *a: [(0, 0.9)])
 
     r = TestClient(web.app).get("/v1/ask", params={"q": "nature"})
 
     assert r.json()[0]["text"] == "the woods"
     main._book_texts.cache_clear()
+
+
+def test_ask_skips_books_changed_on_disk_since_startup(store, monkeypatch, tmp_path):
+    (tmp_path / "7.chunks.json").write_text('[{"label": "I", "text": "the woods"}]')
+    np.save(tmp_path / "7.npy", np.zeros((1, 3), dtype=np.float16))
+    monkeypatch.setattr(main, "BOOKS_DIR", tmp_path)
+    main._book_texts.cache_clear()
+    library = main.load_library()
+    (tmp_path / "7.chunks.json").unlink()  # a sync removed the book
+    monkeypatch.setattr(web, "library", lambda: library)
+    monkeypatch.setattr(web, "search_passages", lambda *a: [(0, 0.9)])
+
+    r = TestClient(web.app).get("/v1/ask", params={"q": "nature"})
+
+    assert r.status_code == 200
+    assert r.json() == []

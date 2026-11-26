@@ -39,6 +39,7 @@ from main import (
     load_library,
     reflow,
     search_passages,
+    StaleLibraryError,
     with_text,
 )
 
@@ -179,7 +180,14 @@ def ask(
         len(ranked),
         t1 - t0,
     )
-    hits = [(with_text(passages[i]), score) for i, score in ranked]
+    hits = []
+    for i, score in ranked:
+        try:
+            hits.append((with_text(passages[i]), score))
+        except StaleLibraryError:
+            logger.warning(
+                "books/ changed since startup; restart to reload", exc_info=True
+            )
     return [
         Match(
             rank=rank,

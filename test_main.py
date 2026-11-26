@@ -9,7 +9,9 @@ from main import (
     chunk_text,
     diversify,
     humanize_author,
+    StaleLibraryError,
     load_library,
+    missing_books,
     preview,
     read_library,
     reflow,
@@ -44,6 +46,36 @@ def test_load_library_keeps_passage_text_out_of_memory(one_book):
 def test_with_text_loads_the_passage_text_from_disk(one_book):
     passages, _ = load_library()
     assert with_text(passages[1]) == passages[1]._replace(text="second")
+
+
+def test_with_text_refuses_a_book_reindexed_after_load(one_book, tmp_path):
+    passages, _ = load_library()
+    (tmp_path / "7.chunks.json").write_text('[{"label": "X", "text": "other"}]')
+    with pytest.raises(StaleLibraryError):
+        with_text(passages[1])
+
+
+def test_with_text_refuses_a_book_removed_after_load(one_book, tmp_path):
+    passages, _ = load_library()
+    (tmp_path / "7.chunks.json").unlink()
+    with pytest.raises(StaleLibraryError):
+        with_text(passages[0])
+
+
+def test_missing_books_lists_ids_without_a_full_index(one_book, tmp_path):
+    (tmp_path / "8.npy").touch()  # vectors without chunks or metadata
+    assert missing_books([7, 8, 9]) == [8, 9]
+
+
+def test_check_exits_nonzero_when_the_library_is_incomplete(one_book, monkeypatch):
+    monkeypatch.setattr(main, "read_library", lambda: [7, 9])
+    with pytest.raises(SystemExit, match="9"):
+        main.main(["check"])
+
+
+def test_check_passes_when_every_book_is_indexed(one_book, monkeypatch):
+    monkeypatch.setattr(main, "read_library", lambda: [7])
+    main.main(["check"])
 
 
 def test_model_downloads_when_not_cached(monkeypatch):

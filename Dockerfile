@@ -23,6 +23,8 @@ RUN python -c "from sentence_transformers import SentenceTransformer as S; S('al
 
 # COPY ignores USER, and sync has to write to books/
 COPY --chown=app:app . .
+# books/ is untracked: index it before building, or the image ships with nothing to search
+RUN python main.py check
 
 EXPOSE 8000
 CMD ["uvicorn", "web:app", "--host", "0.0.0.0", "--port", "8000"]
