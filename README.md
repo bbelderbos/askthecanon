@@ -40,17 +40,20 @@ recorded to a local SQLite database (`classics.db`) via SQLModel.
 
 ## Quick start with Docker
 
-The image includes the model and the embedded library, so there is nothing to install or embed:
+The image bakes in the model and the embedded library. `books/` is not in git, so index it
+first (see [Setup](#setup)), then build; the build fails if any book in `library.txt` is missing:
 
 ```bash
-docker run --rm -p 8000:8000 ghcr.io/bbelderbos/askthecanon
+uv run main.py sync
+docker build -t askthecanon .
+docker run --rm -p 8000:8000 askthecanon
 ```
 
-Open <http://localhost:8000>. The download is about 1 GB and it needs about 1.5 GB of free RAM.
+Open <http://localhost:8000>. The image is about 1 GB and it needs about 1.5 GB of free RAM.
 Use the CLI the same way:
 
 ```bash
-docker run --rm -it ghcr.io/bbelderbos/askthecanon python main.py ask "how do I face death without fear"
+docker run --rm -it askthecanon python main.py ask "how do I face death without fear"
 ```
 
 To use your own library, keep `books/` in a volume and sync against your `library.txt` (this
@@ -58,8 +61,8 @@ fetches and embeds any new books on your machine):
 
 ```bash
 docker run --rm -v classics-books:/app/books -v "$PWD/library.txt:/app/library.txt" \
-  ghcr.io/bbelderbos/askthecanon python main.py sync
-docker run --rm -p 8000:8000 -v classics-books:/app/books ghcr.io/bbelderbos/askthecanon
+  askthecanon python main.py sync
+docker run --rm -p 8000:8000 -v classics-books:/app/books askthecanon
 ```
 
 ## Setup
