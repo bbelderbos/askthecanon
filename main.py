@@ -1,13 +1,15 @@
 import argparse
+import io
 import json
+import logging
 import os
 import re
 import sys
 from collections import Counter
 from collections.abc import Callable
-from functools import cache
+from functools import cache, lru_cache
 from pathlib import Path
-from typing import NamedTuple
+from typing import IO, NamedTuple
 
 import numpy as np
 import pyperclip
@@ -16,10 +18,8 @@ from rich.console import Console
 from rich.panel import Panel
 
 console = Console()
+logger = logging.getLogger(__name__)
 
-# use the locally cached model and skip the hub round-trip (and its rate-limit warning)
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("TQDM_DISABLE", "1")  # silence the model's "Loading weights" bar
 
 SEARCH_URL = "https://gutendex.com/books/"
@@ -133,9 +133,13 @@ def chunk_text(
 
 @cache
 def _model():
-    import sentence_transformers as st  # lazy so the offline env vars take effect first
+    import sentence_transformers as st  # lazy: torch is slow to import
 
-    return st.SentenceTransformer(EMBED_MODEL)
+    # prefer the cache to skip the hub round-trip; a fresh install has to download
+    try:
+        return st.SentenceTransformer(EMBED_MODEL, local_files_only=True)
+    except OSError:
+        return st.SentenceTransformer(EMBED_MODEL)
 
 
 def embed(texts: list[str]) -> np.ndarray:
@@ -187,11 +191,19 @@ def build_index(book_id: int, text: str) -> tuple[list[Chunk], np.ndarray]:
     # (max score drift ~4e-5, no top-k reordering) and the matmul upcasts to f32
     vectors = embed([c.text for c in chunks]).astype(np.float16)
     BOOKS_DIR.mkdir(exist_ok=True)
-    (BOOKS_DIR / f"{book_id}.chunks.json").write_text(
-        json.dumps([c._asdict() for c in chunks])
-    )
-    np.save(BOOKS_DIR / f"{book_id}.npy", vectors)
+    buffer = io.BytesIO()
+    np.save(buffer, vectors)
+    _replace_file(BOOKS_DIR / f"{book_id}.npy", buffer.getvalue())
+    chunks_json = json.dumps([c._asdict() for c in chunks]).encode()
+    _replace_file(BOOKS_DIR / f"{book_id}.chunks.json", chunks_json)
     return chunks, vectors
+
+
+def _replace_file(path: Path, data: bytes) -> None:
+    # swap in whole, never rewrite in place: a reader must not see a half-written file
+    tmp_path = path.with_name(path.name + ".tmp")
+    tmp_path.write_bytes(data)
+    tmp_path.replace(path)
 
 
 def preview(chunk: str, width: int = 90) -> str:
@@ -251,6 +263,7 @@ class Passage(NamedTuple):
     book_id: int = 0
     offset: int = 0  # chunk index within the book
     summary: str = ""  # book-level blurb, repeated across the book's passages
+    version: tuple[int, ...] = ()  # chunks file identity when the library was loaded
 
     def cite(self) -> str:
         where = " · ".join(part for part in (self.author, self.title) if part)
@@ -334,6 +347,25 @@ def index_books(book_ids: list[int]) -> None:
     print("done.")
 
 
+def missing_books(book_ids: list[int]) -> list[int]:
+    exts = ("npy", "chunks.json", "meta.json")
+    return [
+        book_id
+        for book_id in book_ids
+        if not all((BOOKS_DIR / f"{book_id}.{ext}").exists() for ext in exts)
+    ]
+
+
+def check_library() -> None:
+    desired = read_library()
+    if not desired:
+        sys.exit("library.txt has no ids")
+    if missing := missing_books(desired):
+        ids = " ".join(map(str, missing))
+        sys.exit(f"not indexed: {ids} — run: uv run main.py sync")
+    print(f"all {len(desired)} books indexed")
+
+
 def sync_library() -> None:
     desired = read_library()
     if not desired:
@@ -359,12 +391,51 @@ def load_library(book_ids: list[int] | None = None) -> tuple[list[Passage], np.n
         meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
         title, author = meta.get("title", str(book_id)), meta.get("author", "")
         summary = meta.get("summary", "")
-        for i, c in enumerate(json.loads(chunks_path.read_text())):
-            passages.append(
-                Passage(title, author, c["label"], c["text"], book_id, i, summary)
+        with chunks_path.open() as f:
+            version = _file_version(f)
+            chunks = json.load(f)
+        vectors = np.load(vectors_path)
+        if len(vectors) != len(chunks):
+            # one misaligned book would shift every row stacked after it
+            logger.warning(
+                "skipping book %d: %d vectors for %d chunks, run sync",
+                book_id,
+                len(vectors),
+                len(chunks),
             )
-        matrices.append(np.load(vectors_path))
+            continue
+        # text stays on disk (see with_text) so a long-running server fits in less RAM
+        for i, c in enumerate(chunks):
+            passages.append(
+                Passage(title, author, c["label"], "", book_id, i, summary, version)
+            )
+        matrices.append(vectors)
     return passages, np.vstack(matrices) if matrices else np.empty((0, 0))
+
+
+class StaleLibraryError(Exception):
+    """The book's chunks changed on disk after the library was loaded."""
+
+
+def _file_version(f: IO[str]) -> tuple[int, ...]:
+    stat = os.fstat(f.fileno())
+    return stat.st_ino, stat.st_mtime_ns, stat.st_size
+
+
+@lru_cache(maxsize=8)
+def _book_texts(book_id: int, version: tuple[int, ...]) -> tuple[str, ...]:
+    try:
+        with (BOOKS_DIR / f"{book_id}.chunks.json").open() as f:
+            if _file_version(f) != version:
+                raise StaleLibraryError(f"book {book_id} was reindexed since loading")
+            return tuple(c["text"] for c in json.load(f))
+    except FileNotFoundError as e:
+        raise StaleLibraryError(f"book {book_id} was removed since loading") from e
+
+
+def with_text(passage: Passage) -> Passage:
+    texts = _book_texts(passage.book_id, passage.version)
+    return passage._replace(text=texts[passage.offset])
 
 
 def drop_adjacent(
@@ -424,8 +495,8 @@ def ask(
         print(f'\nNothing strong enough for "{query}".')
         return
     console.print(f"\n[bold]Passages for[/bold] [italic]“{query}”[/italic]\n")
-    for rank, (i, score) in enumerate(results, 1):
-        passage = passages[i]
+    hits = [(with_text(passages[i]), score) for i, score in results]
+    for rank, (passage, score) in enumerate(hits, 1):
         console.print(
             f"  [bold cyan]{rank}[/]  [dim]{score:.2f}[/]  {passage.cite()}",
             no_wrap=True,
@@ -440,7 +511,7 @@ def ask(
 
     choice = input("pick a number to deep read (enter to skip) > ").strip()
     if choice.isdigit() and 1 <= int(choice) <= len(results):
-        passage = passages[results[int(choice) - 1][0]]
+        passage = hits[int(choice) - 1][0]
         console.print()
         console.print(
             Panel(
@@ -490,6 +561,7 @@ def main(argv: list[str] | None = None) -> None:
     p_fetch.add_argument("book_id", type=int)
 
     sub.add_parser("sync", help="reconcile books/ embeddings with library.txt")
+    sub.add_parser("check", help="fail unless every book in library.txt is indexed")
 
     p_ask = sub.add_parser(
         "ask", help="find passages across the library for a question"
@@ -515,6 +587,8 @@ def main(argv: list[str] | None = None) -> None:
         print(f"Saved to {save_book(args.book_id)}")
     elif args.command == "sync":
         sync_library()
+    elif args.command == "check":
+        check_library()
     elif args.command == "ask":
         ask(
             args.query,

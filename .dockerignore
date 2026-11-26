@@ -1,0 +1,13 @@
+# allow-list: the image is public, so .env, classics.db and notes must never reach it
+*
+!.python-version
+!pyproject.toml
+!uv.lock
+!main.py
+!web.py
+!db.py
+!library.txt
+!static
+!books/*.npy
+!books/*.chunks.json
+!books/*.meta.json

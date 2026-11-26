@@ -38,9 +38,36 @@ recorded to a local SQLite database (`classics.db`) via SQLModel.
   <img src="images/architecture.png" alt="Classics Architecture Diagram" width="100%" max-width="800px">
 </p>
 
+## Quick start with Docker
+
+The image bakes in the model and the embedded library. `books/` is not in git, so index it
+first (see [Setup](#setup)), then build; the build fails if any book in `library.txt` is missing:
+
+```bash
+uv run main.py sync
+docker build -t askthecanon .
+docker run --rm -p 8000:8000 askthecanon
+```
+
+Open <http://localhost:8000>. The image is about 1 GB and it needs about 1.5 GB of free RAM.
+Use the CLI the same way:
+
+```bash
+docker run --rm -it askthecanon python main.py ask "how do I face death without fear"
+```
+
+To use your own library, keep `books/` in a volume and sync against your `library.txt` (this
+fetches and embeds any new books on your machine):
+
+```bash
+docker run --rm -v classics-books:/app/books -v "$PWD/library.txt:/app/library.txt" \
+  askthecanon python main.py sync
+docker run --rm -p 8000:8000 -v classics-books:/app/books askthecanon
+```
+
 ## Setup
 
-Requires Python 3.14 (`uv` installs it for you).
+To run it without Docker: requires Python 3.14 (`uv` installs it for you).
 
 ```bash
 uv sync                  # install dependencies

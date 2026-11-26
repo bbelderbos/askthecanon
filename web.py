@@ -39,6 +39,8 @@ from main import (
     load_library,
     reflow,
     search_passages,
+    StaleLibraryError,
+    with_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -178,19 +180,27 @@ def ask(
         len(ranked),
         t1 - t0,
     )
+    hits = []
+    for i, score in ranked:
+        try:
+            hits.append((with_text(passages[i]), score))
+        except StaleLibraryError:
+            logger.warning(
+                "books/ changed since startup; restart to reload", exc_info=True
+            )
     return [
         Match(
             rank=rank,
             score=score,
-            cite=passages[i].cite(),
-            author=passages[i].author,
-            title=passages[i].title,
-            label=passages[i].label,
-            text=reflow(passages[i].text),
-            summary=passages[i].summary,
-            book_id=passages[i].book_id,
+            cite=p.cite(),
+            author=p.author,
+            title=p.title,
+            label=p.label,
+            text=reflow(p.text),
+            summary=p.summary,
+            book_id=p.book_id,
         )
-        for rank, (i, score) in enumerate(ranked, 1)
+        for rank, (p, score) in enumerate(hits, 1)
     ]
 
 
